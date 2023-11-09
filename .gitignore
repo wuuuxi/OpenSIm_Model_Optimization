@@ -1,0 +1,8 @@
+# Default ignored files
+*.npy
+__pycache__
+.idea
+main1.py
+subject01*
+arm26*
+*Result*
