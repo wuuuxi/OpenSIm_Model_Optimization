@@ -6,7 +6,7 @@ import ctypes
 import scipy
 import torch
 import csv
-import net
+# import net
 import os
 
 
@@ -207,11 +207,11 @@ if __name__ == '__main__':
 
     # initialization of neural network
     # input = [1, 1, 1]
-    mif = [346.0, 628.0, 60.0]
+    mif_init = np.asarray([346.0, 628.0, 60.0])
     input = [48.9, 63.0, 8.9, 4.6]  # Peak Torque: extension / flexion of elbow, supination / pronation of forearm
-    mynet = net.TestNet(input_shape=4, output_shape=3, hidden_sizes=[64, 64])
-    loss, error = mynet.init(input=input, output=mif, iter=380)
-    print(mynet.net(torch.tensor([input])))
+    # mynet = net.TestNet(input_shape=4, output_shape=3, hidden_sizes=[64, 64])
+    # loss, error = mynet.init(input=input, output=mif_init, iter=380)
+    # print(mynet.net(torch.tensor([input])))
     # plt.plot(loss)
     # plt.figure()
     # plt.subplot(311)
@@ -225,13 +225,18 @@ if __name__ == '__main__':
     fs = 1000
     emg = pd.read_excel('whole body model/CHENYuetian_10kg.xlsx')
     time_emg = emg['t']
-    [emg_BIC, t_BIC] = emg_rectification(emg['BIC'], fs, 'BIC')
-    [emg_BRA, t_BRA] = emg_rectification(emg['BRA'], fs, 'BRA')
-    [emg_BRD, t_BRD] = emg_rectification(emg['BRD'], fs, 'BRD')
+    emg_muscle = [[], [], []]
+    emg_time = [[], [], []]
+    [emg_muscle[0], emg_time[0]] = emg_rectification(emg['BIC'], fs, 'BIC')
+    [emg_muscle[1], emg_time[1]] = emg_rectification(emg['BRA'], fs, 'BRA')
+    [emg_muscle[2], emg_time[2]] = emg_rectification(emg['BRD'], fs, 'BRD')
 
-    mif = []
-    losses = []
+    mifs = []
+    # losses = []
     errors = []
+    mif = mif_init
+    mifs.append(mif)
+
     module_so = osim.AnalyzeTool("whole body model/Setup_StaticOptimization.xml")
     module_so.setName('whole body_yuetian')
     module_so.setModelFilename("whole body model/BUET_yuetian_scaled_double_force.osim")
@@ -245,46 +250,34 @@ if __name__ == '__main__':
     for ir in range(1000):
         print('-' * 40, 'Cycle NO.', ir, '-' * 40)
 
-        # ana = module_so.getAnalysisSet()
-        # b = ana.getPropertyByIndex(0)  # 'objects'
-        # m = b.getValueAsObject(0)  # 'StaticOptimization'
-        # m.printToXML('t.xml')
-        # so = osim.OpenSimObject('t.xml')
-        # so = osim.AnalysisSet('t.xml')
-        # osim.StaticOptimization()
-        # print(module_so.updAnalysisSet().getName())
-        # print(ana.getName())
-        # so = ana.StaticOptimization
-        # print(so.getConvergenceCriterion())
-        # print(so.getMaxIterations())
-        # so.setConvergenceCriterion(1e-3)
-        # so.setMaxIterations(50)
-        # print(so.getMaxIterations())
-        # print(so.getConvergenceCriterion())
-        # module_so.updAnalysisSet()
-        # so = module_so.getAnalysisSet()
-        # print(so.getMaxIterations())
-        # print(so.getConvergenceCriterion())
         module_so.run()
 
         change_file_extension('whole body model/Results/whole body_yuetian_StaticOptimization_activation.sto', 'csv')
         df = pd.read_csv('whole body model/Results/whole body_yuetian_StaticOptimization_activation.csv')
         act_cal, time_cal = from_csv_to_muscle_data(df)
-        batch_emg = []
-        for t in time_cal:
+        print('emg activation:\t', np.mean(act_cal[0]), np.mean(act_cal[1]), np.mean(act_cal[2]))
 
-            idx_BIC = find_nearest_idx(t_BIC, t)
-            idx_BRA = find_nearest_idx(t_BRA, t)
-            idx_BRD = find_nearest_idx(t_BRD, t)
-            batch_emg.append([emg_BIC[idx_BIC], emg_BRA[idx_BRA], emg_BRD[idx_BRD]])
-        batch = [act_cal, batch_emg]
+        batch_ratio = []
+        batch_error = []
+        idx = [0, 0, 0]
+        for i in range(len(time_cal)):
+            idx = np.asarray([find_nearest_idx(emg_time[j], time_cal[i]) for j in range(3)])
+            ratio = np.asarray([act_cal[i][j] / emg_muscle[j][idx[j]] for j in range(3)])
+            error = np.asarray([act_cal[i][j] - emg_muscle[j][idx[j]] for j in range(3)])
+            batch_ratio.append(ratio)
+            batch_error.append(error)
+        batch_ratio = np.asarray(batch_ratio)
+        print('ratio:\t', np.asarray([batch_ratio[:, i].mean() for i in range(3)]))
+        mif = np.asarray([batch_ratio[:, i].mean() * mif[i] for i in range(3)])
+        mifs.append(mif)
+        errors.append(batch_error)
 
         # for _ in range(5):
         #     loss, error = mynet.update(input, torch.tensor(batch))
-        loss, error = mynet.update(input, torch.tensor(batch))
-        losses.append(loss)
-        errors.append(error)
-        print(mynet.net(torch.tensor([input])))
+        # loss, error = mynet.update(input, torch.tensor(batch))
+        # losses.append(loss)
+        # errors.append(error)
+        # print(mynet.net(torch.tensor([input])))
 
         module_so = osim.AnalyzeTool("whole body model/Setup_StaticOptimization.xml")
         module_so.setName('whole body_yuetian')
@@ -297,15 +290,12 @@ if __name__ == '__main__':
         module_so.setFinalTime(time_stop)
 
         model = module_so.getModel()
-        force_nn = mynet.net(torch.tensor([input]))
-        force = force_nn[0].detach().numpy()
-        mif.append(force[0])
         muscle = model.updComponent('forceset/bic_s_l')
-        muscle.set_max_isometric_force(float(force[0, 0]))
+        muscle.set_max_isometric_force(float(mif[0]))
         muscle = model.updComponent('forceset/brachialis_1_l')
-        muscle.set_max_isometric_force(float(force[0, 1]))
+        muscle.set_max_isometric_force(float(mif[1]))
         muscle = model.updComponent('forceset/brachiorad_1_l')
-        muscle.set_max_isometric_force(float(force[0, 2]))
+        muscle.set_max_isometric_force(float(mif[2]))
 
         model = module_so.getModel()
         muscle = model.getComponent('forceset/bic_s_l')
@@ -318,18 +308,17 @@ if __name__ == '__main__':
         assert muscle.getName() == 'brachiorad_1_l'
         print(muscle.getName(), ':\t', muscle.get_max_isometric_force())
 
-        # module_so.setModel(model)
-        np.save('max_isometric_force.npy', mif)
-        np.save('loss.npy', losses)
+        np.save('max_isometric_force.npy', mifs)
+        # np.save('loss.npy', losses)
         np.save('error.npy', errors)
 
-    np.save('max_isometric_force.npy', mif)
-    np.save('loss.npy', losses)
+    np.save('max_isometric_force.npy', mifs)
+    # np.save('loss.npy', losses)
     np.save('error.npy', errors)
     plt.figure()
-    plt.plot(np.asarray(mif)[:, 0])
-    plt.figure()
-    plt.plot(np.asarray(losses)[:, 0])
+    plt.plot(np.asarray(mifs)[:, 0])
+    # plt.figure()
+    # plt.plot(np.asarray(losses)[:, 0])
     plt.figure()
     e = np.asarray(errors)
     u = e.reshape(e.shape[0]*e.shape[1], e.shape[2])
